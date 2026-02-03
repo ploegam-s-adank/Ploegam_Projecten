@@ -1,111 +1,114 @@
 import streamlit as st
 import pandas as pd
+from pathlib import Path
 import folium
 from streamlit_folium import st_folium
 from folium.plugins import Draw
-from pathlib import Path
 from utils_agol import AGOL, arcgis_polygon_from_geojson
 
 st.header("➕ Nieuw project invoeren")
 
 cfg = st.secrets["arcgis"]
-agol = AGOL(cfg["username"], cfg["password"], cfg["portal"])
+agol = AGOL(cfg["username"], cfg["password"], cfg.get("portal"))
 projects_url = cfg["projects_layer_url"]
 relation_field = cfg["relation_key_field"]
 
 DOMAINS = Path("assets/domains")
 
-def load_csv_list(fname: str):
-    path = DOMAINS / fname
-    if not path.exists():
+def load_csv(name):
+    p = DOMAINS / name
+    if not p.exists():
         return []
     try:
-        df = pd.read_csv(path, sep=None, engine="python")
-    except Exception:
-        st.error(f"CSV '{fname}' is ongeldig – controleer op scheve quotes of verkeerd scheidingsteken.")
-        return []
-    col = "waarde" if "waarde" in df.columns else df.columns[0]
-    return df[col].astype(str).tolist()
+        df = pd.read_csv(p, sep=None, engine="python")
+        col = "waarde" if "waarde" in df.columns else df.columns[0]
+        return [""] + df[col].astype(str).tolist()
+    except:
+        return [""]
 
-# (name, type, required, maxlen, dropdown, source)
+# ───────────────────────────────
+# VELDEN
+# (name, label, type, required, maxlen, dropdown_source)
+# ───────────────────────────────
 FIELDS = [
-    ("Projectnr","text", True,10, False,None),
-    ("Bedrijf","int", True,None,True,["001","090","315"]),
-    ("Omschrijving","text", True,256,False,None),
-    ("Opdrachtgever","text", True,100,False,None),
-    ("Calcnr","text", False,10,False,None),
-    ("Soort","text", True,20,True,["Combinatie","Eigen beheer","Onder aanneming"]),
-    ("Combinanten","text",False,50,True,["ACW","Den Ouden","Dura Vermeer","Dura Vermeer Jansma","GMB","Grondbank","Heijmans","Infrascoop","KOVANO","Lenthe","Peters","Uitert"]),
-    ("Combinaam","text",False,20,True,["Biggelaar","Gebr. De Koning","GMB","Holandia","Uitert","Van Oord"]),
-    ("Aanneemsom","float",False,None,False,None),
-    ("Geplande_start","date",False,None,False,None),
-    ("Geplande_oplev","date",False,None,False,None),
-    ("Status","text",True,20,True,["Onderhanden","Gereed"]),
-    ("MT_lid","text",False,5,True,load_csv_list("Directie_MT.csv")),
-    ("PL","text",True,5,True,load_csv_list("Projectleiders.csv")),
-    ("WVB_1","text",False,5,True,load_csv_list("Werkvoorbereiders.csv")),
-    ("WVB_2","text",False,5,True,load_csv_list("Werkvoorbereiders.csv")),
-    ("Uitvoerder","text",False,5,True,load_csv_list("Uitvoerders.csv")),
-    ("KAM_mer","text",False,5,True,load_csv_list("KAM.csv")),
-    ("Opdrachtbonnen","text",False,5,False,None),
-    ("Emailadres","text",False,40,False,None),
-    ("Financieel","text",False,5,False,None),
-    ("Directie_Combi","text",False,5,False,None),
-    ("Adres","text",True,256,False,None),
-    ("Factuur_aan","text",False,256,False,None),
-    ("Controller","text",False,5,True,load_csv_list("Controllers.csv")),
-    ("Projectmap","text",True,256,False,None)
+    ("Projectnr", "Projectnummer", "text", True, 10, None),
+    ("Bedrijf", "Bedrijf", "text", True, None, ["001","090","315"]),
+    ("Omschrijving", "Omschrijving", "text", True, 256, None),
+    ("Opdrachtgever", "Opdrachtgever", "text", True, 100, None),
+    ("Calcnr", "Calcnr", "text", False, 10, None),
+    ("Soort", "Soort", "text", True, 20, ["Combinatie","Eigen beheer","Onder aanneming"]),
+    ("Combinanten", "Combinanten", "text", False, 50, ["ACW","Den Ouden","Dura Vermeer"]),
+    ("Combinaam", "Combinaam", "text", False, 20, ["Biggelaar","Gebr. De Koning"]),
+    ("Aanneemsom","Aanneemsom","float",False,None,None),
+    ("Geplande_start","Geplande start","date",False,None,None),
+    ("Geplande_oplev","Geplande oplevering","date",False,None,None),
+    ("Status","Status","text",True,20,["Onderhanden","Gereed"]),
+    ("MT_lid","MT lid","text",False,5, load_csv("Directie_MT.csv")),
+    ("PL","Projectleider","text",True,5, load_csv("Projectleiders.csv")),
+    ("WVB_1","Werkvoorbereider 1","text",False,5, load_csv("Werkvoorbereiders.csv")),
+    ("WVB_2","Werkvoorbereider 2","text",False,5, load_csv("Werkvoorbereiders.csv")),
+    ("Uitvoerder","Uitvoerder","text",False,5, load_csv("Uitvoerders.csv")),
+    ("KAM_mer","KAM medewerker","text",False,5, load_csv("KAM.csv")),
+    ("Opdrachtbonnen","Opdrachtbonnen","text",False,5,None),
+    ("Emailadres","Emailadres","text",False,40,None),
+    ("Financieel","Financieel","text",False,5,None),
+    ("Directie_Combi","Directie Combinatie","text",False,5,None),
+    ("Adres","Adres","text",True,256,None),
+    ("Factuur_aan","Factuur aan","text",False,256,None),
+    ("Controller","Controller","text",False,5,load_csv("Controllers.csv")),
+    ("Projectmap","Projectmap","text",True,256,None),
 ]
 
 form_vals = {}
 cols = st.columns(2)
 
-for i,(name,typ,req,maxlen,dd,src) in enumerate(FIELDS):
-    col = cols[i % 2]
+for idx, (key,label,typ,req,maxlen,opts) in enumerate(FIELDS):
+    col = cols[idx % 2]
     with col:
-        label = f"{name}{' *' if req else ''}"
-        if dd:
-            form_vals[name] = st.selectbox(label, options=src)
+        label2 = label + (" *" if req else "")
+        if opts:
+            form_vals[key] = st.selectbox(label2, options=opts, key=key)
         else:
             if typ=="text":
-                form_vals[name] = st.text_input(label, max_chars=maxlen)
-            elif typ=="int":
-                form_vals[name] = st.number_input(label, step=1, format="%d")
+                form_vals[key] = st.text_input(label2, max_chars=maxlen, key=key)
             elif typ=="float":
-                form_vals[name] = st.number_input(label, step=1000.0)
+                form_vals[key] = st.number_input(label2, key=key)
             elif typ=="date":
-                d = st.date_input(label)
-                form_vals[name] = d.strftime("%Y-%m-%d")
+                d = st.date_input(label2, key=key)
+                form_vals[key] = d.strftime("%Y-%m-%d")
+            else:
+                form_vals[key] = st.text_input(label2, key=key)
 
 st.caption("Velden met * zijn verplicht.")
 
-# Geometrie
+# GEOMETRIE
 st.subheader("Teken projectgebied")
 m = folium.Map(location=[52.1,5.2], zoom_start=8)
 Draw(export=True).add_to(m)
-out = st_folium(m,height=500)
+out = st_folium(m, height=500)
 
-geom = None
+geometry = None
 if out.get("last_active_drawing"):
     gj = out["last_active_drawing"]["geometry"]
-    geom = arcgis_polygon_from_geojson(gj)
+    geometry = arcgis_polygon_from_geojson(gj)
 
-# Opslaan
+# OPSLAAN
 if st.button("Opslaan"):
-    missing=[nm for (nm,_,req,_,_,_) in FIELDS if req and not form_vals[nm]]
+    missing = [label for (key,label,_,req,_,_) in FIELDS if req and not form_vals[key]]
     if missing:
-        st.error("Ontbrekende verplichte velden: "+", ".join(missing))
+        st.error("Ontbrekende velden: " + ", ".join(missing))
         st.stop()
 
-    attrs = form_vals.copy()
-    attrs[relation_field] = form_vals["Projectnr"]
+    attrs = {k:v for k,v in form_vals.items()}
+    attrs[relation_field] = attrs["Projectnr"]
 
-    feat={"attributes":attrs}
-    if geom:
-        feat["geometry"] = geom
+    feature = {"attributes": attrs}
+    if geometry:
+        feature["geometry"] = geometry
 
     try:
-        agol.add_features(projects_url, [feat])
+        resp = agol.add_features(projects_url, [feature])
         st.success("Project opgeslagen.")
+        st.write(resp)
     except Exception as e:
-        st.error(f"Fout: {e}")
+        st.error(f"Fout bij opslaan: {e}")
