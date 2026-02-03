@@ -1,29 +1,60 @@
 # -*- coding: utf-8 -*-
+"""
+Ploegam – Dashboard (Kaart + Tabel)
+- Floating panel (Kaartopties)
+- Esri World Topographic / Esri World Imagery
+- Kaart default 500px hoog
+- Altijd fit-to-layer bij laden + knop "Zoom volledige laag"
+- Punten met assets/logo.png (CustomIcon)
+- Tooltip = Projectnr, Popup = alle kolommen
+- Selectie via kaart (klik) én via tabel (AG-Grid)
+- Bewerken via Model B (Bewerken -> Opslaan) met update_features()
+"""
+
+from __future__ import annotations
 import base64
 import math
+from typing import Any, Dict, List, Tuple
+
 import streamlit as st
 import pandas as pd
 import folium
 from folium.plugins import Fullscreen
 from streamlit_folium import st_folium
 
-# ✅ Let op: underscore, geen backslash!
-from utils_agol import AGOL
+# Tabelselectie met AG-Grid (optioneel, maar aanbevolen)
+try:
+    from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode
+    AGGRID_AVAILABLE = True
+except Exception:
+    AGGRID_AVAILABLE = False
 
-st.set_page_config(page_title="Dashboard", layout="wide")
-st.header("📊 Dashboard")
+# ✅ Juiste import van jouw helper (let op underscore)
+from utils_agol import AGOL  # utils_agol.py bevat update_features/add_features/delete_features  # noqa: E402
 
 # ──────────────────────────────────────────────────────────────────────────────
-# CONFIG & DATA
+# PAGE CONFIG
 # ──────────────────────────────────────────────────────────────────────────────
-cfg = st.secrets["arcgis"]
-agol = AGOL(cfg["username"], cfg["password"], cfg["portal"])
-projects_url = cfg["projects_layer_url"]
+st.set_page_config(page_title="Ploegam – Kaart + Tabel", layout="wide")
+st.markdown("## 📊 Dashboard – Kaart + Tabel")
 
-# Pad naar je PNG-icoon voor punten (pas aan naar jouw pad)
-POINT_ICON_PATH = "assets/Logo.png"   # <-- zet jouw PNG hier neer (bijv. uit je repo)
+# ──────────────────────────────────────────────────────────────────────────────
+# CONFIG / CONSTANTS
+# ──────────────────────────────────────────────────────────────────────────────
+# Veldnamen
+ID_CANDIDATES = ["OBJECTID", "FID", "Id", "id"]
+LABEL_FIELD = "Projectnr"  # altijd tooltiplabel
+ICON_PATH = "assets/logo.png"  # jouw PNG-icoon in de repo
 
+# Map defaults
+DEFAULT_BASEMAP = "Esri World Topographic"
+DEFAULT_MAP_HEIGHT = 500  # px
+
+# ──────────────────────────────────────────────────────────────────────────────
+# HELPERS
+# ──────────────────────────────────────────────────────────────────────────────
 def load_png_as_data_url(path: str) -> str | None:
+    """Laad PNG en retourneer data-URI (base64) zodat Folium/Leaflet hem inline kan gebruiken."""
     try:
         with open(path, "rb") as f:
             b64 = base64.b64encode(f.read()).decode("utf-8")
@@ -31,96 +62,21 @@ def load_png_as_data_url(path: str) -> str | None:
     except Exception:
         return None
 
-point_icon_data_url = load_png_as_data_url(POINT_ICON_PATH)
-
-try:
-    res = agol.query(projects_url, out_fields="*", return_geometry=True, extra={"outSR": 4326})
-    feats = res.get("features", [])
-    if not feats:
-        st.warning("Geen features gevonden in de laag.")
-except Exception as e:
-    st.error(f"Fout bij ophalen projectdata: {e}")
-    st.stop()
-
-df = pd.DataFrame([f.get("attributes", {}) for f in feats])
-
-# ID-veld bepalen
-id_candidates = [c for c in ["OBJECTID", "FID", "Id", "id"] if c in df.columns]
-ID_FIELD = id_candidates[0] if id_candidates else (df.columns[0] if len(df.columns) else None)
-
-# Labelveld
-label_candidates = [c for c in df.columns if c.lower() in ("projectnaam", "naam", "title", "name")]
-DEFAULT_LABEL = label_candidates[0] if label_candidates else (df.columns[0] if len(df.columns) else None)
-
-# ──────────────────────────────────────────────────────────────────────────────
-# ZIJBALK – instellingen
-# ──────────────────────────────────────────────────────────────────────────────
-with st.sidebar:
-    st.subheader("🛠️ Weergave & interactie")
-
-    basemap = st.selectbox(
-        "Ondergrond",
-        options=["OpenStreetMap", "CartoDB Positron", "CartoDB DarkMatter", "Stamen Terrain", "Esri WorldImagery"],
-        index=0,
-    )
-
-    map_height = st.slider("Hoogte kaart (px)", 450, 1000, 650, 50)
-
-    # Tooltip label(s)
-    show_tooltips = st.toggle("Labels (tooltip) tonen", True)
-    label_fields = st.multiselect(
-        "Labelvelden",
-        options=df.columns.tolist(),
-        default=[DEFAULT_LABEL] if DEFAULT_LABEL else []
-    )
-
-    # Popup toont alle kolommen
-    show_popup_all = st.toggle("Popup alle kolommen", True)
-
-    # Icoongrootte voor het PNG-symbool
-    icon_px = st.slider("Punticoon grootte (px)", 12, 64, 28)
-
-    zoom_to_selection = st.toggle("Automatisch zoomen naar selectie", True)
-
-    # Selectie via ID
-    if ID_FIELD and not df.empty:
-        # Mooiere label-tekst voor selectie
-        if DEFAULT_LABEL and DEFAULT_LABEL in df.columns:
-            id_to_label = dict(zip(df[ID_FIELD], df[DEFAULT_LABEL]))
-            fmt = lambda oid: f"{oid} – {id_to_label.get(oid, '')}"
-        else:
-            fmt = lambda oid: str(oid)
-
-        # State voor selectie
-        if "selected_id" not in st.session_state:
-            st.session_state["selected_id"] = df[ID_FIELD].iloc[0]
-
-        st.session_state["selected_id"] = st.selectbox(
-            "Selecteer record",
-            options=df[ID_FIELD].tolist(),
-            format_func=fmt
-        )
-    else:
-        st.info("Geen ID-veld gevonden voor selectie.")
-
-# ──────────────────────────────────────────────────────────────────────────────
-# GEOMETRIE HELPERS
-# ──────────────────────────────────────────────────────────────────────────────
-def esri_to_struct(geom: dict) -> dict | None:
-    """Zet ESRI-geom om naar {'type': 'point'|'polyline'|'polygon', 'coords': [...]} met (lat, lon)."""
+def esri_to_struct(geom: Dict[str, Any]) -> Dict[str, Any] | None:
+    """Zet ESRI geometry om naar generieke structuur met (lat, lon)."""
     if not geom:
         return None
     if "x" in geom and "y" in geom:
         return {"type": "point", "coords": [(geom["y"], geom["x"])]}
-    if "paths" in geom:
+    if "paths" in geom:  # polyline
         paths = [[(y, x) for x, y in path] for path in geom["paths"]]
         return {"type": "polyline", "coords": paths}
-    if "rings" in geom:
+    if "rings" in geom:  # polygon
         rings = [[(y, x) for x, y in ring] for ring in geom["rings"]]
         return {"type": "polygon", "coords": rings}
     return None
 
-def bounds_of_struct(struct: dict) -> tuple | None:
+def struct_bounds(struct: Dict[str, Any]) -> Tuple[float, float, float, float] | None:
     lats, lons = [], []
     t = struct["type"]
     if t == "point":
@@ -134,242 +90,410 @@ def bounds_of_struct(struct: dict) -> tuple | None:
         return None
     return (min(lats), min(lons), max(lats), max(lons))
 
-def tooltip_text(attrs: dict, fields: list[str] | None) -> str | None:
-    if not fields:
+def struct_center(struct: Dict[str, Any]) -> Tuple[float, float] | None:
+    """Ruwe center als gemiddelde van bounds (prima voor selectie/zoom)."""
+    b = struct_bounds(struct)
+    if not b:
         return None
-    parts = []
-    for c in fields:
-        parts.append(f"{c}: {attrs.get(c, '')}")
-    return " | ".join(parts) if parts else None
+    (min_lat, min_lon, max_lat, max_lon) = b
+    return ((min_lat + max_lat) / 2.0, (min_lon + max_lon) / 2.0)
 
-def popup_html(attrs: dict) -> str:
+def haversine_m(lat1, lon1, lat2, lon2) -> float:
+    """Afstand in meters tussen twee lat/lon punten."""
+    R = 6371000.0
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = phi2 - phi1
+    dlmb = math.radians(lon2 - lon1)
+    a = math.sin(dphi/2)**2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlmb/2)**2
+    return 2 * R * math.asin(math.sqrt(a))
+
+def popup_html(attrs: Dict[str, Any]) -> str:
     rows = "".join(
-        f"<tr><th style='text-align:left;padding-right:8px;'>{k}</th><td>{attrs.get(k, '')}</td></tr>"
-        for k in attrs.keys()
+        f"<tr><th style='text-align:left;padding-right:8px;white-space:nowrap'>{k}</th>"
+        f"<td>{'' if v is None else v}</td></tr>"
+        for k, v in attrs.items()
     )
     return f"<table>{rows}</table>"
 
 # ──────────────────────────────────────────────────────────────────────────────
-# KAART OPBOUWEN
+# DATA LADEN VIA AGOL
 # ──────────────────────────────────────────────────────────────────────────────
-default_center = [52.1, 5.2]
-m = folium.Map(location=default_center, zoom_start=8, tiles=None, control_scale=True)
+cfg = st.secrets["arcgis"]
+agol = AGOL(cfg["username"], cfg["password"], cfg["portal"])  # gebruikt jouw utils_agol helper  # [1](https://ploegam-my.sharepoint.com/personal/s_adank_ploegam_nl/Documents/Microsoft%20Copilot%20Chat-bestanden/utils_agol%20(1).py).py)
+layer_url = cfg["projects_layer_url"]
 
-# Tiles
-if basemap == "OpenStreetMap":
-    folium.TileLayer("OpenStreetMap", name="OpenStreetMap").add_to(m)
-elif basemap == "CartoDB Positron":
-    folium.TileLayer("CartoDB positron", name="CartoDB Positron").add_to(m)
-elif basemap == "CartoDB DarkMatter":
-    folium.TileLayer("CartoDB dark_matter", name="CartoDB DarkMatter").add_to(m)
-elif basemap == "Stamen Terrain":
-    folium.TileLayer("Stamen Terrain", name="Stamen Terrain").add_to(m)
-elif basemap == "Esri WorldImagery":
-    folium.TileLayer(
-        tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-        attr="Tiles © Esri",
-        name="Esri WorldImagery"
-    ).add_to(m)
+# Ophalen
+try:
+    res = agol.query(layer_url, out_fields="*", return_geometry=True,rue, extra={"outSR": 4326})
+    featuresures = res.get("features", [])
+except Exception as e:
+    st.error(f"Fout bijFout bij ophalen data: {e}")
+    st.stop()
 
-fg_all = folium.FeatureGroup(name="Projecten", show=True)
-fg_sel = folium.FeatureGroup(name="🔶 Selectie", show=True)
+if not features:
+    st.warning("Geen features gevondengevonden in de laag.")
+    st.stop()
 
+# Attribuuttabel
+df = pd.Data pd.DataFrame([f.get("attributes", {}) for f in features])
+
+# Key-veld bepalen
+id_field = None
+for cand in ID_CANDIDATES:
+    if cand in df.columns:
+        id_field = cand
+        break
+if id_field is None:
+    id_field = df.columns[0]
+
+# LABEL veld controleren
+if LABEL_FIELD not in df.columns:
+    st.warning(f"Let op: labelveld '{LABEL_FIELD}' niet gevonden in kolommenmmen. Tooltip blijft leeg.")
+# ──────────────────────────────────────────────────────────────────────────────
+# VOORBEREIDING GEOMETRIE/BOUNDS
+# ──────────────────────────────────────────────────────────────────────────────
+# Normaliseer: maak een lijst met (et (attrs, struct, bounds, center)
+norm: List[Dict[str, Any]] = []
 global_bounds = None
-bounds_by_id = {}
 
-# Teken alles + bepaal bounds
-for f in feats:
+for f inf in features:
     attrs = f.get("attributes", {})
-    geom = f.get("geometry", {})
+    geom = f.get("geometrygeometry", {})
     struct = esri_to_struct(geom)
+   eom)
     if not struct:
         continue
+    b = struct_bounds(struct)
+    c = struct_center(struct)
+    item = {"attrs": attrs, "geom": geom, "struct": struct, "bounds": b, "center": c}
+    normnorm.append(item)
 
-    b = bounds_of_struct(struct)
     if b:
-        if global_bounds is None:
+        if not global_bounds:
             global_bounds = b
         else:
             global_bounds = (
-                min(global_bounds[0], b[0]),
-                min(global_bounds[1], b[1]),
-                max(global_bounds[2], b[2]),
-                max(global_bounds[3], b[3])
+                min min(global_bounds[0], b[0]),
+                    min(global_bounds[1], b[1]),
+                max(global_bounds[2],[2], b[2]),
+                max(global_bounds[3], b[, b[3]),
+]),
             )
 
-    fid = attrs.get(ID_FIELD) if ID_FIELD else None
-    if fid is not None and b:
-        bounds_by_id[fid] = b
+if not global_bounds:
+    # fallback NL
+   
+    global_bounds = (50.5, 3.2, 53.7, 7.4)
 
-    tip = tooltip_text(attrs, label_fields) if show_tooltips else None
-    pop = folium.Popup(popup_html(attrs), max_width=500) if show_popup_all else None
+# ──────────────────────────────────────────────────────────────────────────────
+# STATE: SELECTIE + KAARTINSTELLINGEN
+# ──────────────────────────────────────────────────────────────────────────────
+if "selected_id" not in st.session_state:
+    # geen autoselect; start zonder selectie
+    st.session_state["selected_id"] = None
 
-    if struct["type"] == "point":
+if "basemap" not in st.session_state:
+    st.session_state["basemap"] = DEFAULT_BASEMAP
+
+if "map_height" not in st.session_state:
+    st.session_state["map_height"] = DEFAULT_MAP_HEIGHT
+
+# ──────────────────────────────────────────────────────────────────────────────
+# FLOATLOATING PANEL (POPOVER) – KAARTOPTIES
+# ──────────────────────────────────────────────────────────────────────────────
+right = st.columns([1, 0.140.14])[1]  # small right column voor de knop
+with right:
+    try:
+        pop = st= st.popover("⚙ Kaartopties")
+    except Exception:
+        # Fallback voor oudere Streamlit-versies
+        pop = st.expander("⚙r("⚙ Kaartopties", expanded=False)
+
+with pop:
+    st.write("**Ondergrond**nd**")
+    st.session_state["basemap"] = st.radio(
+        label="",
+        options=["Esri World Topographic", "Esri World Imagery"],
+        index=0 if st.session_state["basemap"] == "Esri World Topographic" else 1,
+ 1,
+        horizontal=True
+    )
+
+   
+    st.write("**Kaarthoogte**")
+   
+    st.session_state["map_height"] = st.slider(
+        "Hoogte (px)", min_value=400, max_value=1000, value=st.session_state["map_height"], step=25,=25, label_visibility="collapsed"
+    )
+
+    if st.button("🔍 ZoomZoom volledige laag", use_container_width=True):
+        # Zet een vlag die we bij het tekenen van de kaart gebruiken
+        st.session_state["zoom_full_trigger"] = True
+        st.experimental_rerunerun()
+
+# ──────────────────────────────────────────────────────────────────────────────
+# KAART TEKENEN (FOL(FOLIUM)
+# ──────────────────────────────────────────────────────────────────────────────
+icon_data_url = load_png_as_data_url(ICON_PATHPATH)
+map_height = st.session_state["map_height"]
+basemap = st.session_state["basemap"]
+
+# Basiskaart initialiseren
+default_center = [ (global_bounds[nds[0] + global_bounds[2]) / 2.0, (global_bounds[1] +1] + global_bounds[3]) / 2.0 ]
+m = folium.Map(location=default_center, zoom_start=8, tiles=None, controltrol_scale=True)
+
+# Ondergrond
+if basemap == "Esri World Topographic":
+    folium.TileLayer(
+        tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}",
+        attr    attr="Esri World Topographic Map",
+        name="Esri World Topographic Map",
+        overlay=False
+    ).add_to(m)
+else:
+    folium.TileLayer(
+        tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+        attr="Esri World Imagery",
+        name="Esri World Imagery",
+            overlay=False
+    ).  ).add_to(m)
+
+fg_all = folium.FeatureGroup(namename="Projecten", show=True)
+fg_sel = folium.FeatureGroup(name="🔶 Selectlectie", show=True)
+
+# Teken alle features
+for item in norm:
+    attrs = item["attrs"]
+    struct = item["struct"]
+
+    tip = f"{LABEL_FIELD}: {attrsttrs.get(LABEL_FIELD, '')}" if LABEL_FIELD in attrs else None
+    pop = foliumlium.Popup(popup_html(attrs), max_width=dth=520)
+
+    if struct["type"] == "== "point":
         (lat, lon) = struct["coords"][0]
-        # PNG-icoon indien beschikbaar, anders CircleMarker
-        if point_icon_data_url:
+        if icon_data_url:
             folium.Marker(
-                location=(lat, lon),
-                icon=folium.CustomIcon(icon_image=point_icon_data_url, icon_size=(icon_px, icon_px)),
-                tooltip=tip,
-                popup=pop
+                location=(lat, lon lon),
+                icon=folium.CustomIcon(icon_image=icon_data_url, icon_size=(28,(28, 28)),
+                tooltip=tip, popupp, popup=pop
             ).add_to(fg_all)
         else:
-            folium.CircleMarker(
-                location=(lat, lon),
-                radius=max(6, icon_px // 2),
-                color="#1f77b4",
-                fill=True,
-                fill_color="#1f77b4",
-                weight=1,
-                tooltip=tip,
-                popup=pop
-            ).add_to(fg_all)
+            fol folium.CircleMarker(
+                location=(lat, lon), radius=7, color="#1f77b4", fill=True, fillfill_color="#1f77b4",
+                tooltip=tip, popup=pop
+            ).add.add_to(fg_all)
     elif struct["type"] == "polyline":
         for path in struct["coords"]:
-            folium.PolyLine(path, color="#d62728", weight=3, tooltip=tip, popup=pop).add_to(fg_all)
+            folium.PolyLine(path, color="#d62728", weight=3, tooltip=tip, popup=pup=pop).add_to(fgo(fg_all)
     elif struct["type"] == "polygon":
         for ring in struct["coords"]:
-            folium.Polygon(
-                ring, color="#1f77b4", weight=2, fill=True, fill_opacity=0.2, tooltip=tip, popup=pop
-            ).add_to(fg_all)
+            folium.Polygon(ring, color="#1f77b4", weight=2, fill=True, fill_opacity=0.2, tooltip=tip, popup=pop=pop).add.add_to(fg_all)
 
-# Highlight selectie
-sel_id = st.session_state.get("selected_id", None)
+#)
+
+# Highlight selectie (indien aanwezig)
+sel_id = st.session_state.get("selected_idd_id")
+if)
 if sel_id is not None:
-    for f in feats:
-        attrs = f.get("attributes", {})
-        if attrs.get(ID_FIELD) != sel_id:
+    # zoek corresponderende feature
+    for item in norm:
+        attrs = item["attrs"]
+        if attrs.get(id_field) != sel_id:
             continue
-        geom = f.get("geometry", {})
-        struct = esri_to_struct(geom)
-        if not struct:
-            break
-
-        tip = tooltip_text(attrs, label_fields) if show_tooltips else None
-        pop = folium.Popup(popup_html(attrs), max_width=500) if show_popup_all else None
+        struct = item["struct"]
+        tip = f"{LABEL_FIELD}: {}: {attrs.get(LABEL_FIELD, '')}" if LABEL_FIELD in attrs else None
+        pop = fol folium.Popup(popup_html(attrs),rs), max_width=520)
 
         if struct["type"] == "point":
-            (lat, lon) = struct["coords"][0]
-            # Iets groter icoon of amber kleur als fallback
-            if point_icon_data_url:
+                (lat, lon) = struct["coords"][0]
+            if icon_data_url:
+rl:
                 folium.Marker(
                     location=(lat, lon),
-                    icon=folium.CustomIcon(icon_image=point_icon_data_url, icon_size=(max(icon_px + 6, icon_px), max(icon_px + 6, icon_px))),
-                    tooltip=tip, popup=pop
-                ).add_to(fg_sel)
+                    icon=folium.CustomIcon(icon_image=icon_datadata_url, icon_size=(34, 34)),
+                    tooltip=tip=tip, popup=pop
+                ).add_to(fgo(fg_sel)
             else:
                 folium.CircleMarker(
-                    location=(lat, lon),
-                    radius=max(8, icon_px // 2 + 2),
-                    color="#ffbf00", fill=True, fill_color="#ffbf00", weight=2, tooltip=tip, popup=pop
-                ).add_to(fg_sel)
+er(
+                    location=(lat, lon), radius=10, color="#ffbf00", fill=True, fill_color="#ffbf00",
+                    weight=2, tooltip=tip=tip, popup=pop
+                ).add_to(fg_sel_sel)
         elif struct["type"] == "polyline":
             for path in struct["coords"]:
-                folium.PolyLine(path, color="#ffbf00", weight=6, tooltip=tip, popup=pop).add_to(fg_sel)
+                        folium.PolyLine(path, color="#ffbf00", weight=6, tooltip=tip, popup=pop).add_to(fg_sel)
         elif struct["type"] == "polygon":
             for ring in struct["coords"]:
-                folium.Polygon(ring, color="#ffbf00", weight=4, fill=True, fill_opacity=0.15, tooltip=tip, popup=pop).add_to(fg_sel)
-
-        # Zoomen naar selectie
-        if zoom_to_selection and sel_id in bounds_by_id:
-            (min_lat, min_lon, max_lat, max_lon) = bounds_by_id[sel_id]
-            m.fit_bounds([[min_lat, min_lon], [max_lat, max_lon]])
+                folium.Polygon(ring, color="#ffbf00", weight=4, fill=True, fill_opacity=0.15, tooltip=tip, popup=pup=pop).add_to(fg_sel_sel)
         break
 
-fg_all.add_to(m)
+fg_all_all.add_to(m)
+fgadd_to(m)
 fg_sel.add_to(m)
 Fullscreen().add_to(m)
+folium)
 folium.LayerControl(collapsed=False).add_to(m)
 
-# Als geen selectie/zoom, fit op alle data
-if (sel_id is None or not zoom_to_selection) and global_bounds:
-    (min_lat, min_lon, max_lat, max_lon) = global_bounds
-    m.fit_bounds([[min_lat, min_lon], [max_lat, max_lon]])
+# Altijd naar volledige laag zoomen bij laden of bij expliciete trigger
+(min_lat, min_lon,lon, max_lat, max_lon) = global_bounds
+m.fit_bounds([[min_lat, min_lon], [], [max_lat, max_lon]])
 
-# KAART tonen, over volledige breedte
+#on]])
+
+# Render kaart (volledige breedte)
 st_map = st_folium(m, height=map_height, use_container_width=True)
 
 # ──────────────────────────────────────────────────────────────────────────────
-# TABEL – volledige breedte
+# SELECTIE DOOR TE KLIKKEN OP DE KAART
 # ──────────────────────────────────────────────────────────────────────────────
-st.subheader("🗂️ Projecten")
-if not df.empty:
-    # Visuele indicator voor selectie
-    if ID_FIELD:
-        df_show = df.copy()
-        df_show.insert(0, "🔶 geselecteerd", df_show[ID_FIELD].eq(sel_id))
-        st.dataframe(df_show, use_container_width=True, height=600)
-    else:
-        st.dataframe(df, use_container_width=True, height=600)
+# Standaard gedrag van st_folium: 'last_object_clicked' geeft lat/lon van laatste click/marker
+loc = None
+try:
+    if st_map and "last_object_clicked" in st_map and st_map["last_object_clicked"]:
+        loc = st_map["last_object_clicked"]
+except Exception:
+    loc = None
+
+ifNone
+
+if loc:
+    lat_click = loc.get("lat")
+    lon_click = loc.get("lng")
+    # Vind dichtstbijzijndejnde feature(center) binnen 25 m (voor puntennten is dat exact)
+    nearest = None
+    nearest_dist = 25.0  # meter
+    for item in norm:
+        attrs = item["attrs"]
+        cen = item["center"]
+        if not cen:
+            continue
+        d = haversine_m(lat_click, lon_click, cen[0en[0], cen[1])
+       
+        if d <= nearest_dist:
+            nearest = attrs.get(id_field)
+            nearest_dist = d
+    if nearest is not None and nearest != st.session_state.get("selected_id"):
+        st.session_state["selected_id"_id"] = nearest
+        st.rerun()
+
+# ──────────────────────────────────────────────────────────────────────────────
+# TABEL – AG-Grid met single selection
+# ──────────────────────────────────────────────────────────────────────────────
+st.markdown("### 🗂️"### 🗂️ Projecten")
+
+df_show = df.copy()
+
+# Visuele indicatorator (kolom 0)
+df_show.insert(0, "🔶 geselecteerd", df_show[id_field].eq(st.session_state.get("selectedselected_id")))
+
+if AGGRID_AVAILABLE:
+    gb = GridOptionsBuilder.from_dataframe(df_show(df_show)
+    gb.configure_selection(selection_mode="single", use_checkbox=False)
+    gb.configure_gridgrid_options(domLayout='normal')  # basic stijl
+    grid = AgGrid(
+        df_show,
+        gridgridOptions=gb.build(),
+        update_mode=GridUpdateMode.SELECTION_CHANGED,
+        height=450,
+        allow_unsafe_jscode=False,
+        fit_columnsumns_on_grid_load=True
+    )
+    sel_rows = grid.get("selected_rowsrows", [])
+    if sel_rows:
+        new_id = sel_rows[0].get(idt(id_field)
+        if new_id is not None and new_id != st.session_state.get.get("selected_id"):
+            st.session_state["selected_id"] = new_id
+                st.rerun()
 else:
-    st.info("Geen data om te tonen in de tabel.")
+    st.info("Voor rijselectie in de tabel is **streamlit-aggrid** nodig. Voeg toe aan requirements.txt: `streamlit-agt-aggrid`.")
+    st.dataframe(df_show, use_container_width=True, height=450=450)
 
 # ──────────────────────────────────────────────────────────────────────────────
-# BEWERKEN – formulier voor geselecteerde feature
+#──
+# BEWERKEN (MODEL B) – Bewerken -> Opslaan
 # ──────────────────────────────────────────────────────────────────────────────
-st.markdown("---")
-st.subheader("✏️ Bewerken")
+st.markdowndown("---")
+st.markdown("### ✏️ Bewerewerken")
 
-if sel_id is None or df.empty or ID_FIELD not in df.columns:
-    st.info("Selecteer eerst een record om te bewerken.")
+sel_id = st= st.session_state.get("selected_id")
+if sel_id is None:
+   is None:
+    st.info("Selecteer een record (in de kaart of de tabel) om te bewerken.")
 else:
-    # Attributen van het geselecteerde record ophalen
-    current_attrs = df[df[ID_FIELD] == sel_id].iloc[0].to_dict()
+    current_attrs = df[df[id_field] == sel_id].iloc[0].to_dict()
 
-    # Toggle bewerkmodus
+    # Open/dicht edit mode
     if "edit_mode" not in st.session_state:
         st.session_state["edit_mode"] = False
 
-    cols_btn = st.columns([1, 4, 1])
-    with cols_btn[0]:
-        if st.button("Bewerken", use_container_width=True):
-            st.session_state["edit_mode"] = True
-    with cols_btn[2]:
-        if st.session_state["edit_mode"]:
-            if st.button("Annuleren", use_container_width=True):
+    col_b, col_a = st.columns([0.15,.15, 0.85])
+    with col_b:
+        if not st.session_state["edit_mode"]:
+            if st.button("Bewerken",en", use_container_width=True):
+                st.session_state["edit_mode"] = True
+        else:
+            if st.button("Annuleren", use_container_widthidth=True):
                 st.session_state["edit_mode"] = False
+                st  st.rerun()
 
     if st.session_state["edit_mode"]:
-        with st.form("edit_form", clear_on_submit=False):
-            st.caption(f"Record ID: **{sel_id}**")
+        with st.form("edit_formform", clear_on_submit=False):
+            st.captiontion(f"Record ID: **{sel_id}**")
 
             edited = {}
-            for col, val in current_attrs.items():
-                # ID-veld niet bewerkbaar
-                if col == ID_FIELD:
+            for col, val val in current_attrs.items():
+                # ID niet bewerkbaar
+                if col == id_field:
+_field:
                     st.text_input(col, str(val), disabled=True)
                     edited[col] = val
                     continue
-
-                # Eenvoudige type-afleiding
-                if isinstance(val, (int, float)) and not isinstance(val, bool):
-                    new_val = st.number_input(col, value=float(val) if val is not None else 0.0)
-                    # Probeer integer terug te geven als origineel int was
-                    if isinstance(val, int):
-                        new_val = int(new_val)
+                # type-heuristiek
+                if isinstance(val, (intal, (int, float)) and not isinstance(val, bool):
+                    # gebruik string->float fallbackback
+                    default_val = float(val) if val is not None else 0.0
+                    new_val = st.number_input(col,col, value=default_val)
+                    if isinstance(val(val, int):
+                        new_val = int(new(new_val)
                 else:
-                    new_val = st.text_input(col, "" if val is None else str(val))
+                    new_val = st.text_input(col, "" if val is None else str(val(val))
                 edited[col] = new_val
 
-            submitted = st.form_submit_button("Wijzigingen opslaan")
-            if submitted:
-                # Bouw payload voor applyEdits/update
-                payload = {"attributes": edited}
+            submittedtted = st.form_submit_button("Opslaan")
+                    if submitted:
+                # Zoek geometrie van het geselecteerde object (optioneel bij update)
+                selected_geom = None
+                for item in norm:
+                    if item["attrs"].get(id_field) == sel_id:
+                        selected_geom = item["geom"]
+                        break
+
+                feature_payload = {"attributes": edited}
+                # geometry meesturen is optioneel bij updateFeatures; we laten het achterwege tenzij je het expliciet wilt bijwerken.
+                # Als je geometrie toch wilt meesturen, haal comment weg:
+                # if selected_geom:
+                #     feature_payload["geometry"] = selected_geom
 
                 try:
-                    # 1) Probeer apply_edits (ArcGIS REST)
-                    if hasattr(agol, "apply_edits"):
-                        res = agol.apply_edits(projects_url, updates=[payload])
-                    # 2) Anders probeer update (custom helper)
-                    elif hasattr(agol, "update"):
-                        res = agol.update(projects_url, updates=[payload])
+                    # Gebruik jouw helper; update één feature
+                    res_upd_upd = agol.update_features(layer_url, [feature_payload])  # gebruikt utils_agol.update_features  # [1](https://ploegam-my.sharepoint.com/personal/s_adank_ploegam_nl/Documents/Microsoft%20Copilot%20Chat-bestanden/utils_agol%20(1).py).py)
+                    # Controle basisfeedback
+ack
+                    if isinstance(res_upd, dict)ict) and res_upd.get("updateResults"):
+                        ok = res_upd["updateResults"][0].get("et("success", False)
+                                if ok:
+                            st.success("Wijzigingen opgeslagen.")
+                            st.session_state["edit_mode"] = False
+                            st.rerun()
+                        else:
+                            st.error(f"Opslaan mislukt:ukt: {res_upd['updateResults'][0]}")
                     else:
-                        raise RuntimeError(
-                            "AGOL-helper mist een methode om te schrijven (apply_edits/update)."
-                        )
-                    st.success("Wijzigingen opgeslagen.")
-                    st.session_state["edit_mode"] = False
-                    st.rerun()
+                        st.success("Wijzigingenngen verzonden.")
+                        st.session_state["te["edit_mode"] = False
+                        st.rerun()
                 except Exception as e:
-                    st.error(f"Opslaan mislukt: {e}")
+                    st.error(f"Opslaanlaan mislukt: {e}")
+
+# ──────────────────────────────────────────────────────────────────────────────
+# EINDE
+# ──────────────────────────────────────────────────────────────────────────────
