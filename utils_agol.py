@@ -64,3 +64,23 @@ class AGOL:
                 'returnGeometry': 'true' if return_geometry else 'false'
             }
         )
+
+def arcgis_polygon_from_geojson(gj_geom, wkid=4326):
+    """Converteert een GeoJSON-polygon of multipolygon naar een ArcGIS geometry dict."""
+    typ = gj_geom.get("type")
+
+    if typ == "Polygon":
+        rings = gj_geom["coordinates"]
+
+    elif typ == "MultiPolygon":
+        rings = []
+        for poly in gj_geom["coordinates"]:
+            rings.extend(poly)
+
+    else:
+        raise ValueError("Geometry must be Polygon of MultiPolygon")
+
+    return {
+        "rings": rings,
+        "spatialReference": {"wkid": wkid}
+    }
