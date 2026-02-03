@@ -6,20 +6,15 @@ st.set_page_config(
     layout="wide"
 )
 
-# --- Custom CSS (stijl gelijkend aan Erkenningen) ---
+# --- Custom CSS stijl (zoals Erkenningen-app) ---
 st.markdown("""
 <style>
-/* Pagina lay-out */
 .main { padding: 0rem 3rem; }
-
-/* Header-afbeelding */
 .header-img {
     width: 100%;
     border-radius: 6px;
     margin-bottom: 1.5rem;
 }
-
-/* Titel & subtitel */
 .app-title {
     font-size: 2.5rem;
     font-weight: 700;
@@ -31,8 +26,6 @@ st.markdown("""
     font-size: 1.2rem;
     color: #444;
 }
-
-/* Informatieblok */
 .info-block {
     background: #ffffff;
     padding: 1.5rem;
@@ -43,29 +36,26 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- Logo ---
+# Logo
 logo = Path("assets/ploegam_logo.png")
 if logo.exists():
     st.image(str(logo), width=240)
 
-# --- Header (webp) ---
-header = Path("assets/ploegam_hero.webp")  # << gewijzigde naam
+# Header afbeelding
+header = Path("assets/ploegam_hero.webp")
 if header.exists():
     st.markdown(f"{header.as_posix()}", unsafe_allow_html=True)
 
-# --- Titel & introductie ---
 st.markdown("<div class='app-title'>Ploegam Projecten</div>", unsafe_allow_html=True)
 st.markdown("<div class='app-sub'>Projectbeheer • Registratie • Domeinbeheer</div>", unsafe_allow_html=True)
 
 st.markdown("""
 <div class='info-block'>
   <h3>📘 Over deze toepassing</h3>
-  <p>Deze applicatie biedt één centrale omgeving voor:</p>
   <ul>
-    <li><b>Dashboard</b> – kaartweergave (AGOL embedded) & tabeloverzicht</li>
-    <li><b>Nieuw project</b> – inclusief geometrie tekenen en validaties</li>
-    <li><b>Domeinbeheer</b> – waardelijsten & dropdown-instellingen per veld</li>
+    <li><b>Dashboard</b> – native kaart + tabel</li>
+    <li><b>Nieuw project</b> – formulier + geometrie tekenen</li>
+    <li><b>Domeinbeheer</b> – dropdowns, waardenlijsten, CSV upload</li>
   </ul>
-  <p>Gebruik het menu links om een pagina te openen.</p>
 </div>
 """, unsafe_allow_html=True)
