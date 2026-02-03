@@ -1,43 +1,41 @@
 import streamlit as st
 import pandas as pd
-import streamlit.components.v1 as components
+import folium
+from streamlit_folium import st_folium
 from utils_agol import AGOL
 
-st.header("📊 Dashboard – Overzicht & Kaart")
+st.header("📊 Dashboard – Kaart + Tabel")
 
 cfg = st.secrets["arcgis"]
 agol = AGOL(cfg["username"], cfg["password"], cfg["portal"])
 
 projects_url = cfg["projects_layer_url"]
-webmap_id = cfg.get("webmap_id", "")
 
+# Kaart
 tab_map, tab_tbl = st.tabs(["🗺️ Kaart", "📋 Tabel"])
 
 with tab_map:
-    st.subheader("AGOL kaart")
-    if not webmap_id:
-        st.error("Geen 'webmap_id' ingesteld in secrets.toml – voeg deze toe onder [arcgis].")
-    else:
-        # iFrame embed van Map Viewer "Embed" app (publiek gedeelde webmap)
-        embed_url = (
-            f"https://www.arcgis.com/apps/Embed/index.html"
-            f"?webmap={webmap_id}"
-            f"&zoom=true&legend=true&scale=true&details=false&theme=light"
-        )
-        components.iframe(embed_url, height=600, scrolling=True)
+    st.subheader("Projecten kaart")
 
-with tab_tbl:
-    st.subheader("Projecten tabel")
     try:
-        # outSR=4326 → coördinaten bruikbaar buiten ArcGIS indien nodig
-        data = agol.query(projects_url, out_fields="*", extra={"outSR": 4326})
-        feats = data.get("features", [])
-        df = pd.DataFrame([f["attributes"] for f in feats])
+        resp = agol.query(projects_url, out_fields="*", extra={"outSR": 4326})
+        feats = resp.get("features", [])
     except Exception as e:
-        st.error(f"Fout bij laden van projectlaag: {e}")
+        st.error(f"Kan projectdata niet ophalen: {e}")
         st.stop()
 
-    if df.empty:
-        st.info("Geen records gevonden in de projectlaag.")
-    else:
-        st.dataframe(df, use_container_width=True, height=640)
+    m = folium.Map(location=[52.1, 5.2], zoom_start=8)
+
+    for f in feats:
+        geom = f.get("geometry")
+        if geom and "rings" in geom:
+            for ring in geom["rings"]:
+                latlon = [(y, x) for x, y in ring]
+                folium.Polygon(latlon, color="blue", fill=True, weight=2).add_to(m)
+
+    st_folium(m, height=600)
+
+with tab_tbl:
+    st.subheader("Tabeloverzicht")
+    df = pd.DataFrame([f["attributes"] for f in feats])
+    st.dataframe(df, use_container_width=True, height=600)
