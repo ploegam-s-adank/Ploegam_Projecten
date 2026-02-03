@@ -1,5 +1,6 @@
 streamlit
 pandas
 requests
-streamlit-folium
+openpyxl
 folium
+streamlit-folium
